@@ -1,0 +1,192 @@
+
+<!DOCTYPE html>
+<html lang="th">
+<head>
+  <meta charset="UTF-8">
+  <title>Student Management</title>
+</head>
+<body>
+
+  <h2>Student Management</h2>
+  <h3>ข้อมูลนักศึกษา</h3>
+
+  <form id="form">
+    <p>
+      รหัสนักศึกษา:
+      <input type="text" id="studentId" required>
+    </p>
+
+    <p>
+      ชื่อ:
+      <input type="text" id="firstName" required>
+    </p>
+
+    <p>
+      นามสกุล:
+      <input type="text" id="lastName" required>
+    </p>
+
+    <p>
+      วันเกิด:
+      <input type="date" id="birthDate" required>
+    </p>
+
+    <p>
+      เพศ:
+      <select id="gender" required>
+        <option value="">เลือกเพศ</option>
+        <option value="Male">ชาย</option>
+        <option value="Female">หญิง</option>
+        <option value="Other">อื่น ๆ</option>
+      </select>
+    </p>
+
+    <button type="button" onclick="addStudent()">เพิ่มข้อมูล</button>
+    <button type="button" onclick="updateStudent()">แก้ไขข้อมูล</button>
+    <button type="button" onclick="clearForm()">ล้างข้อมูล</button>
+  </form>
+
+  <p id="message"></p>
+
+  <hr>
+
+  <h3>รายชื่อนักศึกษา</h3>
+
+  <table border="1" cellpadding="8">
+    <thead>
+      <tr>
+        <th>รหัสนักศึกษา</th>
+        <th>ชื่อ</th>
+        <th>นามสกุล</th>
+        <th>วันเกิด</th>
+        <th>เพศ</th>
+        <th>จัดการ</th>
+      </tr>
+    </thead>
+    <tbody id="studentTable"></tbody>
+  </table>
+
+  <script>
+    const $ = (id) => document.getElementById(id);
+    let students = [];
+
+    function getData() {
+      return {
+        studentId: $('studentId').value,
+        firstName: $('firstName').value,
+        lastName: $('lastName').value,
+        birthDate: $('birthDate').value,
+        gender: $('gender').value
+      };
+    }
+
+    function clearForm() {
+      $('form').reset();
+      $('studentId').readOnly = false;
+      $('message').textContent = '';
+    }
+
+    async function loadStudents() {
+      const res = await fetch('/students');
+      students = await res.json();
+
+      const table = $('studentTable');
+      table.innerHTML = '';
+
+      students.forEach(s => {
+        const row = table.insertRow();
+
+        row.insertCell().textContent = s.studentId;
+        row.insertCell().textContent = s.firstName;
+        row.insertCell().textContent = s.lastName;
+        row.insertCell().textContent = s.birthDate;
+        row.insertCell().textContent = s.gender;
+
+        const actions = row.insertCell();
+
+        const edit = document.createElement('button');
+        edit.textContent = 'แก้ไข';
+        edit.onclick = () => editStudent(s.studentId);
+
+        const del = document.createElement('button');
+        del.textContent = 'ลบ';
+        del.onclick = () => deleteStudent(s.studentId);
+
+        actions.append(edit, ' ', del);
+      });
+    }
+
+    async function sendRequest(url, method, data) {
+      try {
+        const res = await fetch(url, {
+          method: method,
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(data)
+        });
+
+        const result = await res.json();
+
+        if (!res.ok) {
+          alert(result.error || 'เกิดข้อผิดพลาด');
+          return;
+        }
+
+        alert(result.message);
+        clearForm();
+        loadStudents();
+      } catch (error) {
+        alert('เชื่อมต่อ API ไม่ได้');
+      }
+    }
+
+    function addStudent() {
+      if (!$('form').reportValidity()) return;
+      sendRequest('/students', 'POST', getData());
+    }
+
+    function editStudent(id) {
+      const s = students.find(s => s.studentId === id);
+      if (!s) return;
+
+      $('studentId').value = s.studentId;
+      $('firstName').value = s.firstName;
+      $('lastName').value = s.lastName;
+      $('birthDate').value = s.birthDate;
+      $('gender').value = s.gender;
+
+      $('studentId').readOnly = true;
+      $('message').textContent = 'กำลังแก้ไขข้อมูลรหัส ' + id;
+    }
+
+    function updateStudent() {
+      if (!$('form').reportValidity()) return;
+
+      const data = getData();
+      sendRequest('/students/' + encodeURIComponent(data.studentId), 'PUT', data);
+    }
+
+    async function deleteStudent(id) {
+      if (!confirm('ต้องการลบข้อมูลนักศึกษาหรือไม่?')) return;
+
+      try {
+        const res = await fetch('/students/' + encodeURIComponent(id), {
+          method: 'DELETE'
+        });
+
+        const result = await res.json();
+        alert(result.message || result.error);
+
+        if (res.ok) {
+          clearForm();
+          loadStudents();
+        }
+      } catch (error) {
+        alert('เชื่อมต่อ API ไม่ได้');
+      }
+    }
+
+    loadStudents();
+  </script>
+
+</body>
+</html>
