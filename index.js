@@ -1,136 +1,82 @@
-
 import { Hono } from 'hono'
-import { serve } from '@hono/node-server'
-import Database from 'better-sqlite3'
+import { neon } from '@neondatabase/serverless'
 import { readFileSync } from 'node:fs'
 
 const app = new Hono()
-const db = new Database('students.db')
+let sql
+let schemaReady
 
-// สร้างตารางนักศึกษา
-db.exec(`
-  CREATE TABLE IF NOT EXISTS students (
-    studentId TEXT PRIMARY KEY,
-    firstName TEXT NOT NULL,
-    lastName TEXT NOT NULL,
-    birthDate TEXT NOT NULL,
-    gender TEXT NOT NULL
-  )
-`)
-
-// หน้าเว็บหลัก
-app.get('/', (c) => {
-  const html = readFileSync('./index.html', 'utf8')
-  return c.html(html)
-})
-
-// GET - ดูข้อมูลนักศึกษาทั้งหมด
-app.get('/students', (c) => {
-  const students = db.prepare('SELECT * FROM students').all()
-  return c.json(students)
-})
-
-// GET - ดูข้อมูลนักศึกษาตามรหัส
-app.get('/students/:id', (c) => {
-  const id = c.req.param('id')
-
-  const student = db.prepare(
-    'SELECT * FROM students WHERE studentId = ?'
-  ).get(id)
-
-  if (!student) {
-    return c.json({ error: 'Student not found' }, 404)
+async function database() {
+  if (!process.env.DATABASE_URL) throw new Error('DATABASE_URL is not configured')
+  sql ??= neon(process.env.DATABASE_URL)
+  if (!schemaReady) {
+    schemaReady = sql`
+      CREATE TABLE IF NOT EXISTS students (
+        "studentId" TEXT PRIMARY KEY,
+        "firstName" TEXT NOT NULL,
+        "lastName" TEXT NOT NULL,
+        "birthDate" TEXT NOT NULL,
+        gender TEXT NOT NULL
+      )
+    `.catch((error) => { schemaReady = undefined; throw error })
   }
+  await schemaReady
+  return sql
+}
 
-  return c.json(student)
+app.onError((error, c) => {
+  console.error('API request failed', { code: error.code, name: error.name })
+  return c.json({ error: 'Database unavailable. Check server configuration.' }, 500)
 })
 
-// POST - เพิ่มข้อมูลนักศึกษา
+app.get('/', (c) => c.html(readFileSync(new URL('./index.html', import.meta.url), 'utf8')))
+
+app.get('/students', async (c) => {
+  const db = await database()
+  return c.json(await db`SELECT * FROM students ORDER BY "studentId"`)
+})
+
+app.get('/students/:id', async (c) => {
+  const db = await database()
+  const [student] = await db`SELECT * FROM students WHERE "studentId" = ${c.req.param('id')}`
+  return student ? c.json(student) : c.json({ error: 'Student not found' }, 404)
+})
+
 app.post('/students', async (c) => {
   let data
-
-  try {
-    data = await c.req.json()
-  } catch {
-    return c.json({ error: 'Invalid JSON' }, 400)
-  }
-
+  try { data = await c.req.json() } catch { return c.json({ error: 'Invalid JSON' }, 400) }
   const { studentId, firstName, lastName, birthDate, gender } = data || {}
-
-  if (!studentId || !firstName || !lastName || !birthDate || !gender) {
+  if (![studentId, firstName, lastName, birthDate, gender].every(v => typeof v === 'string' && v.trim())) {
     return c.json({ error: 'Please fill all fields' }, 400)
   }
-
   try {
-    db.prepare(`
-      INSERT INTO students
-      (studentId, firstName, lastName, birthDate, gender)
-      VALUES (?, ?, ?, ?, ?)
-    `).run(studentId, firstName, lastName, birthDate, gender)
-
+    const db = await database()
+    await db`INSERT INTO students ("studentId", "firstName", "lastName", "birthDate", gender)
+      VALUES (${studentId}, ${firstName}, ${lastName}, ${birthDate}, ${gender})`
     return c.json({ message: 'Student added successfully' }, 201)
   } catch (error) {
-    if (error.code === 'SQLITE_CONSTRAINT_PRIMARYKEY' ||
-        error.code === 'SQLITE_CONSTRAINT_UNIQUE') {
-      return c.json({ error: 'Student ID already exists' }, 409)
-    }
-
-    return c.json({ error: 'Cannot add student' }, 500)
+    if (error.code === '23505') return c.json({ error: 'Student ID already exists' }, 409)
+    throw error
   }
 })
 
-// PUT - แก้ไขข้อมูลนักศึกษา
 app.put('/students/:id', async (c) => {
-  const id = c.req.param('id')
   let data
-
-  try {
-    data = await c.req.json()
-  } catch {
-    return c.json({ error: 'Invalid JSON' }, 400)
-  }
-
+  try { data = await c.req.json() } catch { return c.json({ error: 'Invalid JSON' }, 400) }
   const { firstName, lastName, birthDate, gender } = data || {}
-
-  if (!firstName || !lastName || !birthDate || !gender) {
+  if (![firstName, lastName, birthDate, gender].every(v => typeof v === 'string' && v.trim())) {
     return c.json({ error: 'Please fill all fields' }, 400)
   }
-
-  const result = db.prepare(`
-    UPDATE students
-    SET firstName = ?,
-        lastName = ?,
-        birthDate = ?,
-        gender = ?
-    WHERE studentId = ?
-  `).run(firstName, lastName, birthDate, gender, id)
-
-  if (result.changes === 0) {
-    return c.json({ error: 'Student not found' }, 404)
-  }
-
-  return c.json({ message: 'Student updated successfully' })
+  const db = await database()
+  const rows = await db`UPDATE students SET "firstName" = ${firstName}, "lastName" = ${lastName},
+    "birthDate" = ${birthDate}, gender = ${gender} WHERE "studentId" = ${c.req.param('id')} RETURNING "studentId"`
+  return rows.length ? c.json({ message: 'Student updated successfully' }) : c.json({ error: 'Student not found' }, 404)
 })
 
-// DELETE - ลบข้อมูลนักศึกษา
-app.delete('/students/:id', (c) => {
-  const id = c.req.param('id')
-
-  const result = db.prepare(
-    'DELETE FROM students WHERE studentId = ?'
-  ).run(id)
-
-  if (result.changes === 0) {
-    return c.json({ error: 'Student not found' }, 404)
-  }
-
-  return c.json({ message: 'Student deleted successfully' })
+app.delete('/students/:id', async (c) => {
+  const db = await database()
+  const rows = await db`DELETE FROM students WHERE "studentId" = ${c.req.param('id')} RETURNING "studentId"`
+  return rows.length ? c.json({ message: 'Student deleted successfully' }) : c.json({ error: 'Student not found' }, 404)
 })
 
-// เริ่มต้น Server
-serve({
-  fetch: app.fetch,
-  port: 3000
-})
-
-console.log('Server running at http://localhost:3000')
+export default app

@@ -5,7 +5,7 @@
   "main": "index.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
-    "start": "node index.js"
+    "start": "node --env-file-if-exists=.env server.js"
   },
   "keywords": [],
   "author": "",
@@ -13,7 +13,7 @@
   "type": "module",
   "dependencies": {
     "@hono/node-server": "^2.1.6",
-    "better-sqlite3": "^13.0.3",
+    "@neondatabase/serverless": "^1.2.0",
     "hono": "^4.13.16"
   }
 }
